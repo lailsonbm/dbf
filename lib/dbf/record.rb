@@ -1,11 +1,13 @@
 module DBF
-  
   # An instance of DBF::Record represents a row in the DBF file 
   class Record
+    BLOCK_HEADER_SIZE = 8
+    
+    attr_reader :table
     attr_reader :attributes
     attr_reader :memo_block_size
     
-    delegate :columns, :to => :@table
+    delegate :columns, :to => :table
     
     # Initialize a new DBF::Record
     # 
@@ -32,14 +34,21 @@ module DBF
       columns.map { |column| @attributes[column.name.underscore] }
     end
     
+    # Do all search parameters match?
+    #
+    # @param [Hash] options
+    # @return [Boolean]
+    def match?(options)
+      options.all? {|key, value| attributes[key.to_s.underscore] == value}
+    end
+    
     private
     
     # Defined attribute accessor methods
     def define_accessors
       columns.each do |column|
-        underscored_column_name = column.name.underscore
-        unless respond_to?(underscored_column_name)
-          self.class.send :define_method, underscored_column_name do
+        unless self.class.method_defined?(column.name.underscore)
+          self.class.send :define_method, column.name.underscore do
             @attributes[column.name.underscore]
           end
         end
@@ -48,16 +57,11 @@ module DBF
     
     # Initialize values for a row
     def initialize_values
-      @attributes = columns.inject({}) do |hash, column|
-        if column.type == 'M'
-          memo = read_memo(get_starting_block(column))
-          hash[column.name] = memo
-          hash[column.name.underscore] = memo
+      @attributes = columns.inject(Attributes.new) do |hash, column|
+        if column.memo?
+          hash[column.name] = read_memo(get_starting_block(column))
         else
-          value = unpack_data(column.length)
-          type_cast_value = column.type_cast(value)
-          hash[column.name] = type_cast_value
-          hash[column.name.underscore] = type_cast_value
+          hash[column.name] = column.type_cast(unpack_data(column.length))
         end
         hash
       end
@@ -86,8 +90,7 @@ module DBF
     # @param [Fixnum] start_block
     def read_memo(start_block)
       return nil if !@table.has_memo_file? || start_block < 1
-
-      @table.memo_file_format == :fpt ? build_fpt_memo(start_block) : build_dbt_memo(start_block)
+      send "build_#{@table.memo_file_format}_memo", start_block
     end
     
     # Reconstructs a memo from an FPT memo file
@@ -98,7 +101,7 @@ module DBF
       @memo.seek(start_block * memo_block_size)
       
       memo_type, memo_size, memo_string = @memo.read(memo_block_size).unpack("NNa*")
-      return nil unless memo_type == 1 and memo_size > 0
+      return nil unless memo_type == 1 && memo_size > 0
       
       if memo_size > memo_block_content_size
         memo_string << @memo.read(memo_content_size(memo_size))
@@ -121,7 +124,7 @@ module DBF
         loop do
           block = @memo.read(memo_block_size)
           memo_string << block
-          break if block.rstrip.size < memo_block_size
+          break if block.tr("\000",'').size < memo_block_size
         end
       when "8b" # dbase iv
         memo_type, memo_size = @memo.read(BLOCK_HEADER_SIZE).unpack("LL")

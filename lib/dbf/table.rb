@@ -3,6 +3,24 @@ module DBF
   # DBF::Table is the primary interface to a single DBF file and provides 
   # methods for enumerating and searching the records.
   class Table
+    DBF_HEADER_SIZE = 32
+    FPT_HEADER_SIZE = 512
+    
+    VERSION_DESCRIPTIONS = {
+      "02" => "FoxBase",
+      "03" => "dBase III without memo file",
+      "04" => "dBase IV without memo file",
+      "05" => "dBase V without memo file",
+      "30" => "Visual FoxPro",
+      "31" => "Visual FoxPro with AutoIncrement field",
+      "7b" => "dBase IV with memo file",
+      "83" => "dBase III with memo file",
+      "8b" => "dBase IV with memo file",
+      "8e" => "dBase IV with SQL table",
+      "f5" => "FoxPro with memo file",
+      "fb" => "FoxPro without memo file"
+    }
+    
     attr_reader :column_count           # The total number of columns
     attr_reader :columns                # An array of DBF::Column
     attr_reader :version                # Internal dBase version number
@@ -35,7 +53,7 @@ module DBF
     def reload!
       @records = nil
       get_header_info
-      get_memo_header_info if @memo
+      get_memo_header_info
       get_column_descriptors
     end
     
@@ -59,10 +77,7 @@ module DBF
     #
     # @yield [nil, DBF::Record]
     def each
-      0.upto(@record_count - 1) do |n|
-        seek_to_record(n)
-        yield current_record
-      end
+      0.upto(@record_count - 1) {|index| yield record(index)}
     end
     
     # Retrieve a record by index number.
@@ -189,9 +204,9 @@ module DBF
     def find_all(options, &block)
       results = []
       each do |record|
-        if record && all_values_match?(record, options)
+        if record.try(:match?, options)
           if block_given?
-            yield(record)
+            yield record
           else
             results << record
           end
@@ -206,18 +221,9 @@ module DBF
     # @return [DBF::Record, nil]
     def find_first(options)
       each do |record|
-        return record if record && all_values_match?(record, options)
+        return record if record.try(:match?, options)
       end
       nil
-    end
-    
-    # Do all search parameters match?
-    #
-    # @param [DBF::Record] record
-    # @param [Hash] options
-    # @return [Boolean]
-    def all_values_match?(record, options)
-      options.all? {|key, value| record.attributes[key.to_s.underscore] == value}
     end
     
     # Open memo file
@@ -279,13 +285,15 @@ module DBF
     
     # Determines the memo block size and next available block
     def get_memo_header_info
-      @memo.rewind
-      if @memo_file_format == :fpt
-        @memo_next_available_block, @memo_block_size = @memo.read(FPT_HEADER_SIZE).unpack('N x2 n')
-        @memo_block_size = 0 if @memo_block_size.nil?
-      else
-        @memo_block_size = 512
-        @memo_next_available_block = File.size(@memo.path) / @memo_block_size
+      if has_memo_file?
+        @memo.rewind
+        if @memo_file_format == :fpt
+          @memo_next_available_block, @memo_block_size = @memo.read(FPT_HEADER_SIZE).unpack('N x2 n')
+          @memo_block_size = 0 if @memo_block_size.nil?
+        else
+          @memo_block_size = 512
+          @memo_next_available_block = File.size(@memo.path) / @memo_block_size
+        end
       end
     end
     

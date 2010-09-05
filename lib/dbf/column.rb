@@ -1,6 +1,6 @@
 module DBF
-  class ColumnLengthError < DBFError; end
-  class ColumnNameError < DBFError; end
+  class ColumnLengthError < StandardError; end
+  class ColumnNameError < StandardError; end
   
   # DBF::Column stores all the information about a column including its name,
   # type, length and number of decimal places (if any)
@@ -48,9 +48,10 @@ module DBF
     # @param [String] value
     # @return [Date]
     def decode_date(value)
-      unless value.blank?
-        value.to_date rescue nil
-      end
+      return nil if value.blank?
+      value.is_a?(String) ? value.gsub(' ', '0').to_date : value.to_date
+    rescue
+      nil
     end
     
     # Decode a DateTime value
@@ -141,6 +142,10 @@ module DBF
       s = s[0, s.index("\x00")] if s.index("\x00")
       
       s.gsub(/[^\x20-\x7E]/,"")
+    end
+    
+    def memo?
+      type == 'M'
     end
   end
   
